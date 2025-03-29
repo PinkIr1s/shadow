@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <style>
+            body {
+                height: 100vh;
+                margin: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background-color: black;
+            }
+
+            #myCanvas {
+                width: 512px;
+                height: 512px;
+                border: 2px solid white;
+                border-radius: 5px;
+                background-color: green;
+            }
+        </style>
+    </head>
+    <body>
+        <canvas id="myCanvas" width="1024" height="1024"></canvas>
+    </body>
+<script>
+    let myCanvas = document.getElementById("myCanvas");
+    let ctx = myCanvas.getContext("2d");
+
+    // Define box.
+    let boxPos = {x: 512, y: 512};
+    const boxPoints = [
+        {x: -64, y: -64},
+        {x: 64, y: -64},
+        {x: 64, y: 64},
+        {x: -64, y: 64}
+    ];
+
+    // Define both normals for each point.
+    const normals = [
+        [
+            {x: -1, y: 0},
+            {x: 0, y: -1}
+        ],
+        [
+            {x: 0, y: -1},
+            {x: 1, y: 0}
+        ],
+        [
+            {x: 1, y: 0},
+            {x: 0, y: 1}
+        ],
+        [
+            {x: 0, y: 1},
+            {x: -1, y: 0}
+        ]
+    ];
+    
+    // Define light source.
+    let lightPos = {x: 64, y: 64};
+    
+    const shadowLength = 300;
+    
+    let mousePos = {x: 0, y: 0};
+    document.addEventListener("mousemove", (event) => {
+        mousePos = {x: event.clientX, y: event.clientY};
+    });
+
+    tick();
+
+    function tick() {
+        requestAnimationFrame(tick);
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        // Move lightPos to mouse;
+        const bounds = myCanvas.getBoundingClientRect();
+        lightPos = {
+            x: 2 * (mousePos.x - bounds.x),
+            y: 2 * (mousePos.y - bounds.y)
+        };
+
+        // Draw the box.
+        drawBox(boxPos, boxPoints);
+        
+        // Draw normals.
+        for (let i = 0; i < normals.length; i++) {
+            ctx.strokeStyle = "blue";
+            ctx.beginPath();
+            ctx.moveTo(boxPos.x + boxPoints[i].x, boxPos.y + boxPoints[i].y);
+            ctx.lineTo(boxPos.x + boxPoints[i].x + 100 * normals[i][0].x, boxPos.y + boxPoints[i].y + 100 * normals[i][0].y);
+            ctx.moveTo(boxPos.x + boxPoints[i].x, boxPos.y + boxPoints[i].y);
+            ctx.lineTo(boxPos.x + boxPoints[i].x + 100 * normals[i][1].x, boxPos.y + boxPoints[i].y + 100 * normals[i][1].y);
+            ctx.stroke();
+        }
+
+        ctx.strokeStyle = "red";
+        ctx.strokeRect(lightPos.x - 5, lightPos.y - 5, 10, 10);
+        
+        // Draw the vector from each point to the light source.
+        const lightVectors = findLightVectors(boxPos, boxPoints, lightPos);
+        ctx.strokeStyle = "yellow";
+        for (let i = 0; i < lightVectors.length; i++) {
+            ctx.beginPath();
+            ctx.moveTo(boxPos.x + boxPoints[i].x, boxPos.y + boxPoints[i].y);
+            ctx.lineTo(boxPos.x + boxPoints[i].x + 100 * lightVectors[i].x, boxPos.y + boxPoints[i].y + 100 * lightVectors[i].y);
+            ctx.stroke();
+        }
+
+        let [backFacingIndices, frontFacingIndices] = selectVerticesByLightDirection(lightVectors, normals);
+        let [fixedFront, fixedBack] = reorderIndices(frontFacingIndices, backFacingIndices);
+        let projectedPoints = projectShadowLength(fixedBack, lightVectors);
+        let finalDrawOrder = getFinalOrder(projectedPoints, fixedFront);
+
+        drawShadow(finalDrawOrder, "rgba(0, 0, 0, 0.5)");
+    }
+
+    function selectVerticesByLightDirection(lightVectors, normals) {
+        let awayFacingVertexIndices = [];
+        let frontFacingVertexIndices = [];
+        
+        for (let i = 0; i < 4; i++) {
+            const dot1 = lightVectors[i].x * normals[i][0].x + lightVectors[i].y * normals[i][0].y;
+            const dot2 = lightVectors[i].x * normals[i][1].x + lightVectors[i].y * normals[i][1].y;
+            if (dot1 < 0 || dot2 < 0) {
+                awayFacingVertexIndices.push(i);
+            }
+            if (dot1 > 0 || dot2 > 0) {
+                frontFacingVertexIndices.push(i);
+            }
+        }
+
+        // console.log("away facing: ", awayFacingVertexIndices);
+        // console.log("front facing: ", frontFacingVertexIndices);
+
+        return [awayFacingVertexIndices, frontFacingVertexIndices];
+    }
+
+    function projectShadowLength(backIndices, lightVectors) {
+        let newPoints = [];
+        for (let i = 0; i < backIndices.length; i++) {
+            newPoints.push({
+                x: boxPos.x + boxPoints[backIndices[i]].x - shadowLength * lightVectors[backIndices[i]].x,
+                y: boxPos.y + boxPoints[backIndices[i]].y - shadowLength * lightVectors[backIndices[i]].y
+            });
+            /*
+            ctx.strokeStyle = "white";
+            ctx.beginPath();
+            ctx.moveTo(boxPos.x + boxPoints[i].x, boxPos.y + boxPoints[i].y);
+            ctx.lineTo(projectedPoints[i].x, projectedPoints[i].y);
+            */
+            ctx.stroke();
+        }
+        return newPoints;
+    }
+
+    function reorderIndices(front, back) {
+        if (!back.includes(front[front.length - 1])) {
+            // edge case.
+            console.log("front rotates");
+
+            for (let i = 0; i < front.length; i++) {
+                front.push(front.shift());
+                if (front[0] === back[back.length - 1]) {
+                    break;
+                }
+            }
+
+            console.log("front, back", front, back);
+            return [front, back];
+        }
+
+        if (back[0] === front[0] && back[back.length - 1] === front[front.length - 1]) {
+            // another edge case.
+            console.log("front rotates");
+
+            for (let i = 0; i < front.length; i++) {
+                front.push(front.shift());
+                if (front[0] === back[back.length - 1]) {
+                    break;
+                }
+            }
+
+            return [front, back];
+        }
+
+        if (back.includes(front[0])) {
+            console.log("back rotates");
+            
+            for (let i = 0; i < back.length; i++) {
+                back.push(back.shift());
+                if (back[0] === front[front.length - 1]) {
+                    break;
+                }
+            }
+        } else {
+            console.log("front rotates");
+            
+            for (let i = 0; i < front.length; i++) {
+                front.push(front.shift());
+                if (front[0] === back[back.length - 1]) {
+                    break;
+                }
+            }
+        }
+        console.log("front, back", front, back);
+        return [front, back];
+    }
+
+    function getFinalOrder(shadowPoints, front) {
+        let order = [];
+        // const originPoint = front.pop();
+        // order.push({
+        //     x: boxPos.x + boxPoints[originPoint].x, 
+        //     y: boxPos.y + boxPoints[originPoint].y
+        // });
+        for (let i = 0; i < front.length; i++) {
+            order.push({
+                x: boxPos.x + boxPoints[front[i]].x, 
+                y: boxPos.y + boxPoints[front[i]].y
+            });
+        }
+        for (let i = 0; i < shadowPoints.length; i++) {
+            order.push(shadowPoints[i]);
+        }
+        order.push({
+            x: boxPos.x + boxPoints[front[0]].x, 
+            y: boxPos.y + boxPoints[front[0]].y
+        });
+        return order;
+    }
+
+    function drawShadow(points, colour) {
+        // render the shadow shape.
+        ctx.fillStyle = colour;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(points[i].x, points[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    function drawBox(pos, points) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "white";
+        ctx.beginPath();
+        ctx.moveTo(pos.x + points[0].x, pos.y + points[0].y);
+        ctx.lineTo(pos.x + points[1].x, pos.y + points[1].y);
+        ctx.lineTo(pos.x + points[2].x, pos.y + points[2].y);
+        ctx.lineTo(pos.x + points[3].x, pos.y + points[3].y);
+        ctx.lineTo(pos.x + points[0].x, pos.y + points[0].y);
+        ctx.stroke();
+    }
+
+    function findLightVectors(pos, points, lightPos) {
+        let vectors = [];
+        for (i in points) {
+            const point = points[i];
+            const VpointToLight = {
+                x: lightPos.x - (point.x + pos.x),
+                y: lightPos.y - (point.y + pos.y)
+            };
+            // console.log(lightPos, point);
+
+            const length = Math.sqrt(VpointToLight.x * VpointToLight.x + VpointToLight.y * VpointToLight.y);
+            const normalVect = {
+                x: VpointToLight.x / length,
+                y: VpointToLight.y / length
+            };
+
+            vectors.push(normalVect);
+        }
+
+        return vectors;
+    }
+</script>
+</html>
